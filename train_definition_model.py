@@ -314,7 +314,36 @@ def evaluate_model(sess, data_dir, input_node, target_node, prediction,
   # also print out the rank for each of the 200 instances
   # to see where the model does well, and badly!
 
-  print("evaluate_model() needs implementing!!!")
+  if FLAGS.vocab_file is None:
+    vocab_file = os.path.join(FLAGS.data_dir,
+                              "definitions_%s.vocab" % FLAGS.vocab_size)
+  else:
+    vocab_file = FLAGS.vocab_file
+
+  vocab, rev_vocab = data_utils.initialize_vocabulary(vocab_file)
+
+  ranks = np.array([], dtype=int)
+
+  for idx, epoch in enumerate(
+    gen_epochs(data_dir, total_epochs=1, batch_size = 1, vocab_size=FLAGS.vocab_size, phase="dev")):
+
+    for step, (gloss, head) in enumerate(epoch):
+      print(step, gloss, head)
+      model_preds = sess.run(prediction, feed_dict={input_node: gloss, target_node : head})
+
+      sims = 1 - np.squeeze(dist.cdist(model_preds, embs, metric="cosine"))
+      # replace nans with 0s.
+      sims = np.nan_to_num(sims)
+      candidate_ids = sims.argsort()[::-1][:]
+      #candidates = [rev_vocab[idx] for idx in candidate_ids]
+      print(candidate_ids)
+      rank = np.where(candidate_ids == head)
+      assert len(rank[0]) == 1
+      print(rank[0][0])
+      ranks = np.append(ranks, rank[0], axis=0)
+
+  print(ranks)
+  print(np.median(ranks, axis=0))
 
 
 def restore_model(sess, save_dir, vocab_file, out_form):
