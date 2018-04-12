@@ -1,1 +1,1 @@
-python train_definition_model.py --restore --evaluate
+python train_definition_model.py --restore --evaluate --query

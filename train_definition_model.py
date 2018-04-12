@@ -34,7 +34,7 @@ import data_utils
 tf.app.flags.DEFINE_integer("max_seq_len", 20, "Maximum length (in words) of a"
                             "definition processed by the model")
 tf.app.flags.DEFINE_integer("batch_size", 128, "batch size")
-tf.app.flags.DEFINE_float("learning_rate", 0.0001,
+tf.app.flags.DEFINE_float("learning_rate", 0.001,
                           "Learning rate applied in TF optimiser")
 tf.app.flags.DEFINE_integer("embedding_size", 500,
                             "Number of units in word representation.")
@@ -48,11 +48,13 @@ tf.app.flags.DEFINE_string("train_file", "train.definitions.ids100000",
                            "File with dictionary definitions for training.")
 tf.app.flags.DEFINE_string("dev_file", "'dev.definitions.ids100000",
                            "File with dictionary definitions for dev testing.")
-tf.app.flags.DEFINE_string("save_dir", "/tmp/", "Directory for saving model."
+tf.app.flags.DEFINE_string("save_dir", "/home/andi/r228model/", "Directory for saving model."
                            "If using restore=True, directory to restore from.")
 tf.app.flags.DEFINE_boolean("restore", False, "Restore a trained model"
                             "instead of training one.")
 tf.app.flags.DEFINE_boolean("evaluate", False, "Evaluate model (needs" 
+                            "Restore==True).")
+tf.app.flags.DEFINE_boolean("query", False, "Do query after restore (needs" 
                             "Restore==True).")
 tf.app.flags.DEFINE_string("vocab_file", None, "Path to vocab file")
 tf.app.flags.DEFINE_boolean("pretrained_target", True,
@@ -130,7 +132,8 @@ def get_embedding_matrix(embedding_dict, vocab, emb_dim):
     if word in embedding_dict:
       emb_matrix[ii] = embedding_dict[word]
     else:
-      print("OOV word when building embedding matrix: ", word)
+      #print("OOV word when building embedding matrix: ", word)
+      pass
   return np.asarray(emb_matrix)
 
 
@@ -328,19 +331,19 @@ def evaluate_model(sess, data_dir, input_node, target_node, prediction,
     gen_epochs(data_dir, total_epochs=1, batch_size = 1, vocab_size=FLAGS.vocab_size, phase="dev")):
 
     for step, (gloss, head) in enumerate(epoch):
-      print(step, gloss, head)
-      model_preds = sess.run(prediction, feed_dict={input_node: gloss, target_node : head})
+      model_preds = sess.run(prediction, feed_dict={input_node: gloss})
 
       sims = 1 - np.squeeze(dist.cdist(model_preds, embs, metric="cosine"))
       # replace nans with 0s.
       sims = np.nan_to_num(sims)
       candidate_ids = sims.argsort()[::-1][:]
       #candidates = [rev_vocab[idx] for idx in candidate_ids]
-      print(candidate_ids)
       rank = np.where(candidate_ids == head)
       assert len(rank[0]) == 1
-      print(rank[0][0])
       ranks = np.append(ranks, rank[0], axis=0)
+      
+      if rank[0][0] <= 10 or rank[0][0] > 50000:
+        print(rank[0][0], rev_vocab[head[0]], ":", " ".join([rev_vocab[idx] for idx in gloss[0]]))
 
   print(ranks)
   print(np.median(ranks, axis=0))
@@ -491,10 +494,13 @@ def main(unused_argv):
                          predictions, loss, embs=pre_embs, out_form="cosine")
 
         # Load the final saved model and run querying routine.
-        query_model(sess, input_node, predictions,
-                    vocab, rev_vocab, FLAGS.max_seq_len, embs=pre_embs,
-                    out_form="cosine")
+        if FLAGS.query:
+          query_model(sess, input_node, predictions,
+                      vocab, rev_vocab, FLAGS.max_seq_len, embs=pre_embs,
+                      out_form="cosine")
 
+  writer = tf.summary.FileWriter('./graph', tf.get_default_graph())
+  writer.close()
 
 if __name__ == "__main__":
   tf.app.run()
