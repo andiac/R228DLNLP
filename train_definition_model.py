@@ -32,6 +32,8 @@ import tensorflow as tf
 import data_utils
 from mylogger import logger
 
+import pdb
+
 tf.app.flags.DEFINE_integer("max_seq_len", 20, "Maximum length (in words) of a"
                             "definition processed by the model")
 tf.app.flags.DEFINE_integer("batch_size", 128, "batch size")
@@ -43,13 +45,13 @@ tf.app.flags.DEFINE_integer("vocab_size", 100000, "Number of words the model"
                             "knows and stores representations for")
 tf.app.flags.DEFINE_integer("num_epochs", 1000, "Train for this number of"
                             "sweeps through the training set")
-tf.app.flags.DEFINE_string("data_dir", "../data/definitions/", "Directory for finding"
+tf.app.flags.DEFINE_string("data_dir", "./data/definitions/", "Directory for finding"
                            "training data and dumping processed data.")
 tf.app.flags.DEFINE_string("train_file", "train.definitions.ids100000",
                            "File with dictionary definitions for training.")
 tf.app.flags.DEFINE_string("dev_file", "'dev.definitions.ids100000",
                            "File with dictionary definitions for dev testing.")
-tf.app.flags.DEFINE_string("save_dir", "/home/andi/r228model/", "Directory for saving model."
+tf.app.flags.DEFINE_string("save_dir", "~/r228model/", "Directory for saving model."
                            "If using restore=True, directory to restore from.")
 tf.app.flags.DEFINE_boolean("restore", False, "Restore a trained model"
                             "instead of training one.")
@@ -58,17 +60,19 @@ tf.app.flags.DEFINE_boolean("evaluate", False, "Evaluate model (needs"
 tf.app.flags.DEFINE_boolean("query", False, "Do query after restore (needs" 
                             "Restore==True).")
 tf.app.flags.DEFINE_string("vocab_file", None, "Path to vocab file")
-tf.app.flags.DEFINE_boolean("pretrained_target", True,
+tf.app.flags.DEFINE_boolean("pretrained_target", False,
                             "Use pre-trained embeddings for head words.")
 tf.app.flags.DEFINE_boolean("pretrained_input", False,
                             "Use pre-trained embeddings for gloss words.")
 tf.app.flags.DEFINE_string("embeddings_path",
-                           "../embeddings/GoogleWord2Vec.clean.normed.pkl",
+                           "./embeddings/GoogleWord2Vec.clean.normed.pkl",
                            "Path to pre-trained (.pkl) word embeddings.")
 tf.app.flags.DEFINE_string("encoder_type", "recurrent", "BOW or recurrent.")
 tf.app.flags.DEFINE_string("model_name", "recurrent", "BOW or recurrent.")
 
 FLAGS = tf.app.flags.FLAGS
+
+#pdb.set_trace()
 
 def read_data(data_path, vocab_size, phase="train"):
   """Read data from gloss and head files.
@@ -274,11 +278,11 @@ def get_dev_loss(sess, total_loss, gloss_in, head_in, data_dir, vocab_size):
       dev_loss_step = sess.run(total_loss, feed_dict={gloss_in: gloss, head_in: head})
       dev_loss += dev_loss_step
       acc_step += 1
-  print("yooooooooo", dev_loss, acc_step)
+  print("dev loss and accumulate step:", dev_loss, acc_step)
   return dev_loss/acc_step
 
-def get_eval_score(sess, data_dir, vocab_size, output_form, pre_embs):
-
+def get_eval_score(sess, data_dir, vocab_size, output_form, pre_embs, phase="dev"):
+  print("output_form: ", output_form)
   # get tf nodes to calc the eval score
   graph = tf.get_default_graph()
   input_node = graph.get_tensor_by_name("input_placeholder:0")
@@ -289,13 +293,18 @@ def get_eval_score(sess, data_dir, vocab_size, output_form, pre_embs):
 
   ranks = np.array([], dtype=int)
   for idx, epoch in enumerate(
-    gen_epochs(data_dir, total_epochs=1, batch_size = 1, vocab_size=FLAGS.vocab_size, phase="dev")):
+    gen_epochs(data_dir, total_epochs=1, batch_size = 1, vocab_size=FLAGS.vocab_size, phase=phase)):
     for step, (gloss, head) in enumerate(epoch):
       model_preds = sess.run(predictions, feed_dict={input_node: gloss})
-      sims = 1 - np.squeeze(dist.cdist(model_preds, pre_embs, metric="cosine"))
-      # replace nans with 0s.
-      sims = np.nan_to_num(sims)
-      candidate_ids = sims.argsort()[::-1][:]
+      if output_form == "softmax":
+        # Exclude padding and _UNK tokens from the top-k calculation.
+        candidate_ids = np.squeeze(model_preds)[2:].argsort()[:][::-1] + 2
+      else:
+        sims = 1 - np.squeeze(dist.cdist(model_preds, pre_embs, metric="cosine"))
+        # replace nans with 0s.
+        sims = np.nan_to_num(sims)
+        candidate_ids = sims.argsort()[::-1][:]
+
       rank = np.where(candidate_ids == head)
       assert len(rank[0]) == 1
       ranks = np.append(ranks, rank[0], axis=0)
@@ -316,7 +325,7 @@ def train_network(model, num_epochs, batch_size, data_dir, save_dir,
     training_losses = []
     avg_dev_loss = get_dev_loss(sess, total_loss, gloss_in, head_in, data_dir, vocab_size)
     eval_score = get_eval_score(sess, data_dir, vocab_size, output_form, pre_embs)
-    logger.info("Training start, avg_dev_loss: %.4f, eval_score: %1f" % (avg_dev_loss, eval_score))
+    logger.info("Training start, avg_dev_loss: %.4f, eval_score: %.1f" % (avg_dev_loss, eval_score))
 
     # epoch is a generator of batches which passes over the data once.
     for idx, epoch in enumerate(
@@ -345,7 +354,7 @@ def train_network(model, num_epochs, batch_size, data_dir, save_dir,
           training_loss = 0
 
       avg_dev_loss = get_dev_loss(sess, total_loss, gloss_in, head_in, data_dir, vocab_size)
-      print("hahahaha", acc_train_loss, acc_cases)
+      print("Total acc train_loss and acc_cases: ", acc_train_loss, acc_cases)
       eval_score = get_eval_score(sess, data_dir, vocab_size, output_form, pre_embs)
       logger.info("Epoch %d: avg_train_loss: %.4f, avg_dev_loss: %.4f, eval_score: %.1f" % (idx, acc_train_loss/acc_cases, avg_dev_loss, eval_score))
       # Save current model after another epoch.
@@ -374,18 +383,25 @@ def evaluate_model(sess, data_dir, input_node, target_node, prediction,
   vocab, rev_vocab = data_utils.initialize_vocabulary(vocab_file)
 
   ranks = np.array([], dtype=int)
-
   for idx, epoch in enumerate(
     gen_epochs(data_dir, total_epochs=1, batch_size = 1, vocab_size=FLAGS.vocab_size, phase="dev")):
 
     for step, (gloss, head) in enumerate(epoch):
       model_preds = sess.run(prediction, feed_dict={input_node: gloss})
 
-      sims = 1 - np.squeeze(dist.cdist(model_preds, embs, metric="cosine"))
-      # replace nans with 0s.
-      sims = np.nan_to_num(sims)
-      candidate_ids = sims.argsort()[::-1][:]
-      #candidates = [rev_vocab[idx] for idx in candidate_ids]
+      if out_form == "softmax":
+        # Exclude padding and _UNK tokens from the top-k calculation.
+        candidate_ids = np.squeeze(model_preds)[2:].argsort()[:][::-1] + 2
+        # Replace top-k ids with corresponding words.
+        #candidates = [rev_vocab[idx] for idx in candidate_ids]
+        # Cosine requires sim to be calculated for each vocab word.
+      else:
+        sims = 1 - np.squeeze(dist.cdist(model_preds, embs, metric="cosine"))
+        # replace nans with 0s.
+        sims = np.nan_to_num(sims)
+        candidate_ids = sims.argsort()[::-1][:]
+        #candidates = [rev_vocab[idx] for idx in candidate_ids]
+      
       rank = np.where(candidate_ids == head)
       assert len(rank[0]) == 1
       ranks = np.append(ranks, rank[0], axis=0)
