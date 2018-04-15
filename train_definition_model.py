@@ -30,6 +30,7 @@ import scipy.spatial.distance as dist
 import tensorflow as tf
 
 import data_utils
+from mylogger import logger
 
 tf.app.flags.DEFINE_integer("max_seq_len", 20, "Maximum length (in words) of a"
                             "definition processed by the model")
@@ -38,7 +39,7 @@ tf.app.flags.DEFINE_float("learning_rate", 0.001,
                           "Learning rate applied in TF optimiser")
 tf.app.flags.DEFINE_integer("embedding_size", 500,
                             "Number of units in word representation.")
-tf.app.flags.DEFINE_integer("vocab_size", 100000, "Nunber of words the model"
+tf.app.flags.DEFINE_integer("vocab_size", 100000, "Number of words the model"
                             "knows and stores representations for")
 tf.app.flags.DEFINE_integer("num_epochs", 1000, "Train for this number of"
                             "sweeps through the training set")
@@ -67,10 +68,7 @@ tf.app.flags.DEFINE_string("embeddings_path",
 tf.app.flags.DEFINE_string("encoder_type", "recurrent", "BOW or recurrent.")
 tf.app.flags.DEFINE_string("model_name", "recurrent", "BOW or recurrent.")
 
-
-
 FLAGS = tf.app.flags.FLAGS
-
 
 def read_data(data_path, vocab_size, phase="train"):
   """Read data from gloss and head files.
@@ -267,25 +265,67 @@ def build_model(max_seq_len, vocab_size, emb_size, learning_rate, encoder_type,
     train_step = tf.train.AdamOptimizer(learning_rate).minimize(total_loss)
     return gloss_in, head_in, total_loss, train_step, output_form
 
+def get_dev_loss(sess, total_loss, gloss_in, head_in, data_dir, vocab_size):
+  dev_loss = 0.0
+  acc_step = 0
+  for idx, epoch in enumerate(
+      gen_epochs(data_dir, 1, 1, vocab_size, phase="dev")):
+    for step, (gloss, head) in enumerate(epoch):
+      dev_loss_step = sess.run(total_loss, feed_dict={gloss_in: gloss, head_in: head})
+      dev_loss += dev_loss_step
+      acc_step += 1
+  print("yooooooooo", dev_loss, acc_step)
+  return dev_loss/acc_step
+
+def get_eval_score(sess, data_dir, vocab_size, output_form, pre_embs):
+
+  # get tf nodes to calc the eval score
+  graph = tf.get_default_graph()
+  input_node = graph.get_tensor_by_name("input_placeholder:0")
+  if output_form == "softmax":
+    predictions = graph.get_tensor_by_name("predictions:0")
+  else:
+    predictions = graph.get_tensor_by_name("fully_connected/Tanh:0")
+
+  ranks = np.array([], dtype=int)
+  for idx, epoch in enumerate(
+    gen_epochs(data_dir, total_epochs=1, batch_size = 1, vocab_size=FLAGS.vocab_size, phase="dev")):
+    for step, (gloss, head) in enumerate(epoch):
+      model_preds = sess.run(predictions, feed_dict={input_node: gloss})
+      sims = 1 - np.squeeze(dist.cdist(model_preds, pre_embs, metric="cosine"))
+      # replace nans with 0s.
+      sims = np.nan_to_num(sims)
+      candidate_ids = sims.argsort()[::-1][:]
+      rank = np.where(candidate_ids == head)
+      assert len(rank[0]) == 1
+      ranks = np.append(ranks, rank[0], axis=0)
+
+  return np.median(ranks, axis=0)
 
 def train_network(model, num_epochs, batch_size, data_dir, save_dir,
-                  vocab_size, name="model", verbose=True):
+                  vocab_size, pre_embs, name="model", verbose=True):
   # Running count of the number of training instances.
   num_training = 0
   # saver object for saving the model after each epoch.
   saver = tf.train.Saver()
   with tf.Session(config=tf.ConfigProto(log_device_placement=True)) as sess:
-    gloss_in, head_in, total_loss, train_step, _ = model
+    gloss_in, head_in, total_loss, train_step, output_form = model
     # Initialize the model parameters.
     sess.run(tf.global_variables_initializer())
     # Record all training losses for potential reporting.
     training_losses = []
+    avg_dev_loss = get_dev_loss(sess, total_loss, gloss_in, head_in, data_dir, vocab_size)
+    eval_score = get_eval_score(sess, data_dir, vocab_size, output_form, pre_embs)
+    logger.info("Training start, avg_dev_loss: %.4f, eval_score: %1f" % (avg_dev_loss, eval_score))
+
     # epoch is a generator of batches which passes over the data once.
     for idx, epoch in enumerate(
         gen_epochs(
             data_dir, num_epochs, batch_size, vocab_size, phase="train")):
       # Running total for training loss reset every 500 steps.
       training_loss = 0
+      acc_cases = 0
+      acc_train_loss = 0
       if verbose:
         print("\nEPOCH", idx)
       for step, (gloss, head) in enumerate(epoch):
@@ -294,6 +334,8 @@ def train_network(model, num_epochs, batch_size, data_dir, save_dir,
             [total_loss, train_step],
             feed_dict={gloss_in: gloss, head_in: head})
         training_loss += training_loss_
+        acc_cases += len(head)
+        acc_train_loss += training_loss_ * len(head)
         if step % 500 == 0 and step > 0:
           if verbose:
             loss_ = training_loss / 500
@@ -301,10 +343,16 @@ def train_network(model, num_epochs, batch_size, data_dir, save_dir,
                   % (step, loss_))
           training_losses.append(training_loss / 500)
           training_loss = 0
+
+      avg_dev_loss = get_dev_loss(sess, total_loss, gloss_in, head_in, data_dir, vocab_size)
+      print("hahahaha", acc_train_loss, acc_cases)
+      eval_score = get_eval_score(sess, data_dir, vocab_size, output_form, pre_embs)
+      logger.info("Epoch %d: avg_train_loss: %.4f, avg_dev_loss: %.4f, eval_score: %.1f" % (idx, acc_train_loss/acc_cases, avg_dev_loss, eval_score))
       # Save current model after another epoch.
       save_path = os.path.join(save_dir, "%s_%s.ckpt" % (name, idx))
       save_path = saver.save(sess, save_path)
       print("Model saved in file: %s after epoch: %s" % (save_path, idx))
+      # get_dev_loss(sess, total_loss, gloss_in, head_in, data_dir, vocab_size)
     print("Total data points seen during training: %s" % num_training)
     return save_dir, saver
 
@@ -347,7 +395,6 @@ def evaluate_model(sess, data_dir, input_node, target_node, prediction,
 
   print(ranks)
   print(np.median(ranks, axis=0))
-
 
 def restore_model(sess, save_dir, vocab_file, out_form):
   model_path = tf.train.latest_checkpoint(save_dir)
@@ -419,6 +466,9 @@ def main(unused_argv):
   If restore FLAG is true, loads an existing model and runs test
   routine. If restore FLAG is false, builds a model and trains it.
   """
+
+  logger.info("train starts, params:" + str(sys.argv))
+
   if FLAGS.vocab_file is None:
     vocab_file = os.path.join(FLAGS.data_dir,
                               "definitions_%s.vocab" % FLAGS.vocab_size)
@@ -471,6 +521,7 @@ def main(unused_argv):
         FLAGS.data_dir,
         FLAGS.save_dir,
         FLAGS.vocab_size,
+        pre_embs,
         name=FLAGS.model_name)
 
   # Load an existing model.
