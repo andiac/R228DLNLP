@@ -51,7 +51,7 @@ tf.app.flags.DEFINE_string("train_file", "train.definitions.ids100000",
                            "File with dictionary definitions for training.")
 tf.app.flags.DEFINE_string("dev_file", "'dev.definitions.ids100000",
                            "File with dictionary definitions for dev testing.")
-tf.app.flags.DEFINE_string("save_dir", "~/r228model/", "Directory for saving model."
+tf.app.flags.DEFINE_string("save_dir", "/home/andi/r228model", "Directory for saving model."
                            "If using restore=True, directory to restore from.")
 tf.app.flags.DEFINE_boolean("restore", False, "Restore a trained model"
                             "instead of training one.")
@@ -69,6 +69,8 @@ tf.app.flags.DEFINE_string("embeddings_path",
                            "Path to pre-trained (.pkl) word embeddings.")
 tf.app.flags.DEFINE_string("encoder_type", "recurrent", "BOW or recurrent.")
 tf.app.flags.DEFINE_string("model_name", "recurrent", "BOW or recurrent.")
+tf.app.flags.DEFINE_integer("terminate_epochs", 10, "Terminate training if "
+                            "the dev_eval_score not updated for such epochs")
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -141,6 +143,10 @@ def get_embedding_matrix(embedding_dict, vocab, emb_dim):
 
 def gen_batch(raw_data, batch_size):
   raw_x, raw_y = raw_data
+  # shuffle
+  p = np.random.permutation(len(raw_y))
+  raw_x = raw_x[p]
+  raw_y = raw_y[p]
   data_length = len(raw_x)
   num_batches = data_length // batch_size
   data_x, data_y = [], []
@@ -216,6 +222,7 @@ def build_model(max_seq_len, vocab_size, emb_size, learning_rate, encoder_type,
             shape=[vocab_size, emb_size])
     # embeddings for the batch of definitions (glosses).
     embs = tf.nn.embedding_lookup(embedding_matrix, gloss_in)
+    # logger.info(embs.get_shape().as_list())
     if pretrained_target:
       out_size = pre_embs.shape[-1]
     else:
@@ -308,7 +315,10 @@ def get_eval_score(sess, data_dir, vocab_size, output_form, pre_embs, phase="dev
       rank = np.where(candidate_ids == head)
       assert len(rank[0]) == 1
       ranks = np.append(ranks, rank[0], axis=0)
+      if phase == "train" and step >= 199:
+        break
 
+  print(phase, len(ranks))
   return np.median(ranks, axis=0)
 
 def train_network(model, num_epochs, batch_size, data_dir, save_dir,
@@ -324,8 +334,12 @@ def train_network(model, num_epochs, batch_size, data_dir, save_dir,
     # Record all training losses for potential reporting.
     training_losses = []
     avg_dev_loss = get_dev_loss(sess, total_loss, gloss_in, head_in, data_dir, vocab_size)
-    eval_score = get_eval_score(sess, data_dir, vocab_size, output_form, pre_embs)
-    logger.info("Training start, avg_dev_loss: %.4f, eval_score: %.1f" % (avg_dev_loss, eval_score))
+    dev_eval_score = get_eval_score(sess, data_dir, vocab_size, output_form, pre_embs)
+    train_eval_score = get_eval_score(sess, data_dir, vocab_size, output_form, pre_embs, phase="train")
+    logger.info("Training start, train_eval_score:%.1f, avg_dev_loss: %.4f, dev_eval_score: %.1f" % (train_eval_score, avg_dev_loss, dev_eval_score))
+
+    best_eval_score = dev_eval_score
+    no_better_count = 0
 
     # epoch is a generator of batches which passes over the data once.
     for idx, epoch in enumerate(
@@ -355,13 +369,21 @@ def train_network(model, num_epochs, batch_size, data_dir, save_dir,
 
       avg_dev_loss = get_dev_loss(sess, total_loss, gloss_in, head_in, data_dir, vocab_size)
       print("Total acc train_loss and acc_cases: ", acc_train_loss, acc_cases)
-      eval_score = get_eval_score(sess, data_dir, vocab_size, output_form, pre_embs)
-      logger.info("Epoch %d: avg_train_loss: %.4f, avg_dev_loss: %.4f, eval_score: %.1f" % (idx, acc_train_loss/acc_cases, avg_dev_loss, eval_score))
-      # Save current model after another epoch.
-      save_path = os.path.join(save_dir, "%s_%s.ckpt" % (name, idx))
-      save_path = saver.save(sess, save_path)
-      print("Model saved in file: %s after epoch: %s" % (save_path, idx))
-      # get_dev_loss(sess, total_loss, gloss_in, head_in, data_dir, vocab_size)
+      dev_eval_score = get_eval_score(sess, data_dir, vocab_size, output_form, pre_embs)
+      train_eval_score = get_eval_score(sess, data_dir, vocab_size, output_form, pre_embs, phase="train")
+      logger.info("Epoch %d: avg_train_loss: %.4f, train_eval_score: %.1f, avg_dev_loss: %.4f, dev_eval_score: %.1f" % (idx, acc_train_loss/acc_cases, train_eval_score, avg_dev_loss, dev_eval_score))
+      if dev_eval_score < best_eval_score:
+        best_eval_score = dev_eval_score
+        no_better_count = 0
+        # Save current model after another epoch.
+        save_path = os.path.join(save_dir, "%s_%s.ckpt" % (name, idx))
+        save_path = saver.save(sess, save_path)
+        print("Model saved in file: %s after epoch: %s" % (save_path, idx))
+      else:
+        no_better_count += 1
+        print("dev_eval_score not been better for %d epochs" % no_better_count)
+        if no_better_count == FLAGS.terminate_epochs:
+          break
     print("Total data points seen during training: %s" % num_training)
     return save_dir, saver
 
