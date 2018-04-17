@@ -67,10 +67,12 @@ tf.app.flags.DEFINE_boolean("pretrained_input", False,
 tf.app.flags.DEFINE_string("embeddings_path",
                            "./embeddings/GoogleWord2Vec.clean.normed.pkl",
                            "Path to pre-trained (.pkl) word embeddings.")
-tf.app.flags.DEFINE_string("encoder_type", "recurrent", "BOW or recurrent.")
-tf.app.flags.DEFINE_string("model_name", "recurrent", "BOW or recurrent.")
+tf.app.flags.DEFINE_string("encoder_type", "recurrent", "BOW or recurrent or CNN.")
+tf.app.flags.DEFINE_string("model_name", "recurrent", "BOW or recurrent or CNN.")
 tf.app.flags.DEFINE_integer("terminate_epochs", 10, "Terminate training if "
                             "the dev_eval_score not updated for such epochs")
+tf.app.flags.DEFINE_integer("window_size", 4, "window size of text CNN")
+tf.app.flags.DEFINE_integer("num_filters", 10, "Number of filters of CNN")
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -234,6 +236,29 @@ def build_model(max_seq_len, vocab_size, emb_size, learning_rate, encoder_type,
       _, state = tf.nn.dynamic_rnn(cell, embs, dtype=tf.float32)
       # state is a pair: (hidden_state, output)
       core_out = state[0]
+    elif encoder_type == "CNN":
+      conv1 = tf.layers.conv2d(
+              embs,
+              filters=FLAGS.num_filters,
+              kernel_size=[FLAGS.window_size, emb_size],
+              padding='VALID',
+              activation=tf.nn.relu,
+              name='conv1')
+      pool1 = tf.layers.max_pooling2d(
+              conv1,
+              pool_size=FLAGS.pool_size,
+              strides=FLAGS.pool_stride,
+              padding='SAME',
+              name='pool1')
+      pool1 = tf.transpose(pool1, [0,1,3,2], name='pool1t')
+      conv2 = tf.layers.con2d(
+              pool1,
+              filters=FLAGS.num_filters,
+              kernel_size=[FLAGS.window_size, FLAGS.num_filters],
+              padding='VALID'
+              name='conv2')
+      core_out = tf.squeeze(tf.reduce_max(conv2, 1), squeeze_dims=[1], name='pool2')
+    # BOW
     else:
       core_out = tf.reduce_mean(embs, axis=1)
     # core_out is the output from the gloss encoder.
