@@ -72,6 +72,8 @@ tf.app.flags.DEFINE_string("model_name", "recurrent", "BOW or recurrent or CNN."
 tf.app.flags.DEFINE_integer("terminate_epochs", 10, "Terminate training if "
                             "the dev_eval_score not updated for such epochs")
 tf.app.flags.DEFINE_integer("window_size", 4, "window size of text CNN")
+tf.app.flags.DEFINE_integer("pool_size", 4, "Number of pool size of CNN")
+tf.app.flags.DEFINE_integer("pool_stride", 2, "Number of pool stride of CNN")
 tf.app.flags.DEFINE_integer("num_filters", 10, "Number of filters of CNN")
 
 FLAGS = tf.app.flags.FLAGS
@@ -237,6 +239,7 @@ def build_model(max_seq_len, vocab_size, emb_size, learning_rate, encoder_type,
       # state is a pair: (hidden_state, output)
       core_out = state[0]
     elif encoder_type == "CNN":
+      embs = tf.expand_dims(embs, 3)
       conv1 = tf.layers.conv2d(
               embs,
               filters=FLAGS.num_filters,
@@ -251,11 +254,11 @@ def build_model(max_seq_len, vocab_size, emb_size, learning_rate, encoder_type,
               padding='SAME',
               name='pool1')
       pool1 = tf.transpose(pool1, [0,1,3,2], name='pool1t')
-      conv2 = tf.layers.con2d(
+      conv2 = tf.layers.conv2d(
               pool1,
               filters=FLAGS.num_filters,
               kernel_size=[FLAGS.window_size, FLAGS.num_filters],
-              padding='VALID'
+              padding='VALID',
               name='conv2')
       core_out = tf.squeeze(tf.reduce_max(conv2, 1), squeeze_dims=[1], name='pool2')
     # BOW
