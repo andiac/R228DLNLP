@@ -71,10 +71,12 @@ tf.app.flags.DEFINE_string("encoder_type", "recurrent", "BOW or recurrent or CNN
 tf.app.flags.DEFINE_string("model_name", "recurrent", "BOW or recurrent or CNN.")
 tf.app.flags.DEFINE_integer("terminate_epochs", 10, "Terminate training if "
                             "the dev_eval_score not updated for such epochs")
-tf.app.flags.DEFINE_integer("window_size", 4, "window size of text CNN")
-tf.app.flags.DEFINE_integer("pool_size", 4, "Number of pool size of CNN")
-tf.app.flags.DEFINE_integer("pool_stride", 2, "Number of pool stride of CNN")
-tf.app.flags.DEFINE_integer("num_filters", 10, "Number of filters of CNN")
+tf.app.flags.DEFINE_integer("window_size", 2, "window size of text CNN")
+tf.app.flags.DEFINE_integer("pool_size", 1, "Number of pool size of CNN")
+tf.app.flags.DEFINE_integer("pool_stride", 1, "Number of pool stride of CNN")
+tf.app.flags.DEFINE_integer("num_filters", 300, "Number of filters of CNN")
+tf.app.flags.DEFINE_float("dropout_keep_prob", 0.8,
+                          "Keep probability of dropout")
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -210,6 +212,7 @@ def build_model(max_seq_len, vocab_size, emb_size, learning_rate, encoder_type,
         tf.int32, [None, max_seq_len], name="input_placeholder")
     # Batch of the corresponding targets (heads).
     head_in = tf.placeholder(tf.int32, [None], name="labels_placeholder")
+    dropout_keep_prob = tf.placeholder(tf.float32, name="dropout_keep_prob")
     with tf.variable_scope("embeddings"):
       if pretrained_input:
         assert pre_embs is not None, "Must include pre-trained embedding matrix"
@@ -283,6 +286,8 @@ def build_model(max_seq_len, vocab_size, emb_size, learning_rate, encoder_type,
           core_out,
           out_size,
           activation_fn=tf.tanh)
+      # Dropout
+      core_out = tf.nn.dropout(core_out, dropout_keep_prob)
       # Embeddings for the batch of targets/heads.
       targets = tf.nn.embedding_lookup(out_emb_matrix, head_in)
       # cosine_distance assumes the arguments are unit normalized.
@@ -302,21 +307,21 @@ def build_model(max_seq_len, vocab_size, emb_size, learning_rate, encoder_type,
     # Average loss across batch.
     total_loss = tf.reduce_mean(losses, name="total_loss")
     train_step = tf.train.AdamOptimizer(learning_rate).minimize(total_loss)
-    return gloss_in, head_in, total_loss, train_step, output_form
+    return gloss_in, head_in, total_loss, train_step, output_form, dropout_keep_prob
 
-def get_dev_loss(sess, total_loss, gloss_in, head_in, data_dir, vocab_size):
+def get_dev_loss(sess, total_loss, gloss_in, head_in, data_dir, vocab_size, dropout_keep_prob):
   dev_loss = 0.0
   acc_step = 0
   for idx, epoch in enumerate(
       gen_epochs(data_dir, 1, 1, vocab_size, phase="dev")):
     for step, (gloss, head) in enumerate(epoch):
-      dev_loss_step = sess.run(total_loss, feed_dict={gloss_in: gloss, head_in: head})
+      dev_loss_step = sess.run(total_loss, feed_dict={gloss_in: gloss, head_in: head, dropout_keep_prob: 1.0})
       dev_loss += dev_loss_step
       acc_step += 1
   print("dev loss and accumulate step:", dev_loss, acc_step)
   return dev_loss/acc_step
 
-def get_eval_score(sess, data_dir, vocab_size, output_form, pre_embs, phase="dev"):
+def get_eval_score(sess, data_dir, vocab_size, output_form, pre_embs, dropout_keep_prob, phase="dev"):
   print("output_form: ", output_form)
   # get tf nodes to calc the eval score
   graph = tf.get_default_graph()
@@ -330,7 +335,7 @@ def get_eval_score(sess, data_dir, vocab_size, output_form, pre_embs, phase="dev
   for idx, epoch in enumerate(
     gen_epochs(data_dir, total_epochs=1, batch_size = 1, vocab_size=FLAGS.vocab_size, phase=phase)):
     for step, (gloss, head) in enumerate(epoch):
-      model_preds = sess.run(predictions, feed_dict={input_node: gloss})
+      model_preds = sess.run(predictions, feed_dict={input_node: gloss, dropout_keep_prob: 1.0})
       if output_form == "softmax":
         # Exclude padding and _UNK tokens from the top-k calculation.
         candidate_ids = np.squeeze(model_preds)[2:].argsort()[:][::-1] + 2
@@ -356,14 +361,14 @@ def train_network(model, num_epochs, batch_size, data_dir, save_dir,
   # saver object for saving the model after each epoch.
   saver = tf.train.Saver()
   with tf.Session(config=tf.ConfigProto(log_device_placement=True)) as sess:
-    gloss_in, head_in, total_loss, train_step, output_form = model
+    gloss_in, head_in, total_loss, train_step, output_form, dropout_keep_prob = model
     # Initialize the model parameters.
     sess.run(tf.global_variables_initializer())
     # Record all training losses for potential reporting.
     training_losses = []
-    avg_dev_loss = get_dev_loss(sess, total_loss, gloss_in, head_in, data_dir, vocab_size)
-    dev_eval_score = get_eval_score(sess, data_dir, vocab_size, output_form, pre_embs)
-    train_eval_score = get_eval_score(sess, data_dir, vocab_size, output_form, pre_embs, phase="train")
+    avg_dev_loss = get_dev_loss(sess, total_loss, gloss_in, head_in, data_dir, vocab_size, dropout_keep_prob)
+    dev_eval_score = get_eval_score(sess, data_dir, vocab_size, output_form, pre_embs, dropout_keep_prob)
+    train_eval_score = get_eval_score(sess, data_dir, vocab_size, output_form, pre_embs, dropout_keep_prob, phase="train")
     logger.info("Training start, train_eval_score:%.1f, avg_dev_loss: %.4f, dev_eval_score: %.1f" % (train_eval_score, avg_dev_loss, dev_eval_score))
 
     best_eval_score = dev_eval_score
@@ -383,7 +388,7 @@ def train_network(model, num_epochs, batch_size, data_dir, save_dir,
         num_training += len(gloss)
         training_loss_, _ = sess.run(
             [total_loss, train_step],
-            feed_dict={gloss_in: gloss, head_in: head})
+            feed_dict={gloss_in: gloss, head_in: head, dropout_keep_prob: FLAGS.dropout_keep_prob})
         training_loss += training_loss_
         acc_cases += len(head)
         acc_train_loss += training_loss_ * len(head)
@@ -395,10 +400,10 @@ def train_network(model, num_epochs, batch_size, data_dir, save_dir,
           training_losses.append(training_loss / 500)
           training_loss = 0
 
-      avg_dev_loss = get_dev_loss(sess, total_loss, gloss_in, head_in, data_dir, vocab_size)
+      avg_dev_loss = get_dev_loss(sess, total_loss, gloss_in, head_in, data_dir, vocab_size, dropout_keep_prob)
       print("Total acc train_loss and acc_cases: ", acc_train_loss, acc_cases)
-      dev_eval_score = get_eval_score(sess, data_dir, vocab_size, output_form, pre_embs)
-      train_eval_score = get_eval_score(sess, data_dir, vocab_size, output_form, pre_embs, phase="train")
+      dev_eval_score = get_eval_score(sess, data_dir, vocab_size, output_form, pre_embs, dropout_keep_prob)
+      train_eval_score = get_eval_score(sess, data_dir, vocab_size, output_form, pre_embs, dropout_keep_prob, phase="train")
       logger.info("Epoch %d: avg_train_loss: %.4f, train_eval_score: %.1f, avg_dev_loss: %.4f, dev_eval_score: %.1f" % (idx, acc_train_loss/acc_cases, train_eval_score, avg_dev_loss, dev_eval_score))
       if dev_eval_score < best_eval_score:
         best_eval_score = dev_eval_score
@@ -416,7 +421,7 @@ def train_network(model, num_epochs, batch_size, data_dir, save_dir,
     return save_dir, saver
 
 def evaluate_model(sess, data_dir, input_node, target_node, prediction,
-                   loss, embs, out_form="cosine"): 
+                   loss, embs, dropout_keep_prob, out_form="cosine"): 
   # read the development and test data using gen_epochs
   # use sess.run and feed_dict to get a prediction
   # (as numpy variable)
@@ -437,7 +442,7 @@ def evaluate_model(sess, data_dir, input_node, target_node, prediction,
     gen_epochs(data_dir, total_epochs=1, batch_size = 1, vocab_size=FLAGS.vocab_size, phase="dev")):
 
     for step, (gloss, head) in enumerate(epoch):
-      model_preds = sess.run(prediction, feed_dict={input_node: gloss})
+      model_preds = sess.run(prediction, feed_dict={input_node: gloss, dropout_keep_prob: 1.0})
 
       if out_form == "softmax":
         # Exclude padding and _UNK tokens from the top-k calculation.
@@ -471,6 +476,7 @@ def restore_model(sess, save_dir, vocab_file, out_form):
   # get the names of input and output tensors
   input_node = graph.get_tensor_by_name("input_placeholder:0")
   target_node = graph.get_tensor_by_name("labels_placeholder:0")
+  dropout_keep_prob = graph.get_tensor_by_name("dropout_keep_prob:0")
   if out_form == "softmax":
     predictions = graph.get_tensor_by_name("predictions:0")
   else:
@@ -478,10 +484,10 @@ def restore_model(sess, save_dir, vocab_file, out_form):
   loss = graph.get_tensor_by_name("total_loss:0") # check this is OK
   # vocab is mapping from words to ids, rev_vocab is the reverse.
   vocab, rev_vocab = data_utils.initialize_vocabulary(vocab_file)
-  return input_node, target_node, predictions, loss, vocab, rev_vocab
+  return input_node, target_node, predictions, loss, vocab, rev_vocab, dropout_keep_prob
 
 def query_model(sess, input_node, predictions, vocab, rev_vocab, 
-                max_seq_len, saver=None, embs=None, out_form="cosine"):
+                max_seq_len, dropout_keep_prob, saver=None, embs=None, out_form="cosine"):
   while True:
     sys.stdout.write("Type a definition: ")
     sys.stdout.flush()
@@ -495,7 +501,7 @@ def query_model(sess, input_node, predictions, vocab, rev_vocab,
     padded_ids = np.asarray(data_utils.pad_sequence(token_ids, max_seq_len))
     input_data = np.asarray([padded_ids])
     # Single vector encoding the input gloss.
-    model_preds = sess.run(predictions, feed_dict={input_node: input_data})
+    model_preds = sess.run(predictions, feed_dict={input_node: input_data, dropout_keep_prob: 1.0})
     # Softmax already provides scores over the vocab.
     if out_form == "softmax":
       # Exclude padding and _UNK tokens from the top-k calculation.
@@ -602,18 +608,18 @@ def main(unused_argv):
     with tf.device("/cpu:0"):
       with tf.Session() as sess:
         (input_node, target_node, predictions, loss, vocab,
-          rev_vocab) = restore_model(sess, FLAGS.save_dir, vocab_file,
+          rev_vocab, dropout_keep_prob) = restore_model(sess, FLAGS.save_dir, vocab_file,
                                      out_form="cosine")
 
         if FLAGS.evaluate:
           evaluate_model(sess, FLAGS.data_dir,
                          input_node, target_node,
-                         predictions, loss, embs=pre_embs, out_form="cosine")
+                         predictions, loss, pre_embs, dropout_keep_prob, out_form="cosine")
 
         # Load the final saved model and run querying routine.
         if FLAGS.query:
           query_model(sess, input_node, predictions,
-                      vocab, rev_vocab, FLAGS.max_seq_len, embs=pre_embs,
+                      vocab, rev_vocab, FLAGS.max_seq_len, dropout_keep_prob, embs=pre_embs,
                       out_form="cosine")
 
   writer = tf.summary.FileWriter('./graph', tf.get_default_graph())
