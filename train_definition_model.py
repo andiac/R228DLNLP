@@ -69,7 +69,7 @@ tf.app.flags.DEFINE_string("embeddings_path",
                            "Path to pre-trained (.pkl) word embeddings.")
 tf.app.flags.DEFINE_string("encoder_type", "recurrent", "BOW or recurrent or CNN.")
 tf.app.flags.DEFINE_string("model_name", "recurrent", "BOW or recurrent or CNN.")
-tf.app.flags.DEFINE_integer("terminate_epochs", 10, "Terminate training if "
+tf.app.flags.DEFINE_integer("terminate_epochs", 6, "Terminate training if "
                             "the dev_eval_score not updated for such epochs")
 tf.app.flags.DEFINE_integer("window_size", 2, "window size of text CNN")
 tf.app.flags.DEFINE_integer("pool_size", 1, "Number of pool size of CNN")
@@ -77,6 +77,7 @@ tf.app.flags.DEFINE_integer("pool_stride", 1, "Number of pool stride of CNN")
 tf.app.flags.DEFINE_integer("num_filters", 300, "Number of filters of CNN")
 tf.app.flags.DEFINE_float("dropout_keep_prob", 0.8,
                           "Keep probability of dropout")
+tf.app.flags.DEFINE_string("activation", "tanh", "tanh, relu or linear.")
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -266,7 +267,9 @@ def build_model(max_seq_len, vocab_size, emb_size, learning_rate, encoder_type,
       core_out = tf.squeeze(tf.reduce_max(conv2, 1), squeeze_dims=[1], name='pool2')
     # BOW
     else:
-      core_out = tf.reduce_mean(embs, axis=1)
+      # core_out = tf.reduce_mean(embs, axis=1)
+      core_out = tf.reshape(tf.concat(embs, axis=1), (-1, max_seq_len*emb_size))
+      logger.info(core_out.get_shape().as_list())
     # core_out is the output from the gloss encoder.
     output_form = "cosine"
     if pretrained_target:
@@ -281,11 +284,18 @@ def build_model(max_seq_len, vocab_size, emb_size, learning_rate, encoder_type,
             shape=[vocab_size, out_size],
             initializer=tf.constant_initializer(pre_embs),
             trainable=False)
+      if FLAGS.activation == "tanh":
+        activation = tf.tanh
+      elif FLAGS.activation == "relu":
+        activation = tf.nn.relu
+      else:
+        activation = None
       # Put core_out thro' a final non-linear layer.
       core_out = tf.contrib.layers.fully_connected(
           core_out,
           out_size,
-          activation_fn=tf.tanh)
+          activation_fn=activation)
+      #logger.info(core_out)
       # Dropout
       core_out = tf.nn.dropout(core_out, dropout_keep_prob)
       # Embeddings for the batch of targets/heads.
@@ -329,7 +339,13 @@ def get_eval_score(sess, data_dir, vocab_size, output_form, pre_embs, dropout_ke
   if output_form == "softmax":
     predictions = graph.get_tensor_by_name("predictions:0")
   else:
-    predictions = graph.get_tensor_by_name("fully_connected/Tanh:0")
+    if FLAGS.activation == "tanh":
+      fcname = "fully_connected/Tanh:0"
+    elif FLAGS.activation == "relu":
+      fcname = "fully_connected/Relu:0"
+    else:
+      fcname = "fully_connected/BiasAdd:0"
+    predictions = graph.get_tensor_by_name(fcname)
 
   ranks = np.array([], dtype=int)
   for idx, epoch in enumerate(
