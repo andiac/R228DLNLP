@@ -248,10 +248,11 @@ def build_model(max_seq_len, vocab_size, emb_size, learning_rate, encoder_type,
       # [None, 20, 300]
       a = tf.keras.layers.Permute((2, 1))(outputs)
       a = tf.keras.layers.Dense(max_seq_len, activation='softmax')(a)
-      probs = tf.keras.layers.Permute((2, 1))(outputs)
-      probs = tf.reduce_mean(probs, axis=1)
-      probs = tf.expand_dims(probs, axis=1)
-      #print(probs.get_shape().as_list())
+      # print(a.get_shape().as_list())
+      a = tf.reduce_mean(a, axis=1)
+      # print(a.get_shape().as_list())
+      probs = tf.expand_dims(a, axis=1)
+      # print(probs.get_shape().as_list())
       #print(outputs.get_shape().as_list())
       # tf.keras.layers.Dense()
       core_out = tf.squeeze(tf.matmul(probs, outputs), squeeze_dims=[1])
@@ -282,6 +283,12 @@ def build_model(max_seq_len, vocab_size, emb_size, learning_rate, encoder_type,
       core_out = tf.squeeze(tf.reduce_max(conv2, 1), squeeze_dims=[1], name='pool2')
     elif encoder_type == "BOWFC":
       core_out = tf.reshape(tf.concat(embs, axis=1), (-1, max_seq_len*emb_size))
+    elif encoder_type == "ATT":
+      a = tf.keras.layers.Permute((2, 1))(embs)
+      a = tf.keras.layers.Dense(max_seq_len, activation='softmax')(a)
+      a = tf.reduce_mean(a, axis=1)
+      probs = tf.expand_dims(a, axis=1)
+      core_out = tf.squeeze(tf.matmul(probs, embs), squeeze_dims=[1])
     # BOW
     else:
       core_out = tf.reduce_mean(embs, axis=1)
