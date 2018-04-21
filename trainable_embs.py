@@ -305,9 +305,9 @@ def build_model(max_seq_len, vocab_size, emb_size, learning_rate, encoder_type,
         dim=1)
     # Average loss across batch.
     total_loss = tf.reduce_mean(losses, name="total_loss")
-    if FLAGS.optimizer = "adam":
+    if FLAGS.optimizer == "adam":
       train_step = tf.train.AdamOptimizer(learning_rate).minimize(total_loss)
-    elif FLAGS.optimizer = "sgd":
+    elif FLAGS.optimizer == "sgd":
       train_step = tf.train.GradientDescentOptimizer(learning_rate).minimize(total_loss)
     else:
       train_step = tf.train.RMSPropOptimizer(learning_rate).minimize(total_loss)
