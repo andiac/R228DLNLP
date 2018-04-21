@@ -78,6 +78,7 @@ tf.app.flags.DEFINE_integer("num_filters", 300, "Number of filters of CNN")
 tf.app.flags.DEFINE_float("dropout_keep_prob", 0.8,
                           "Keep probability of dropout")
 tf.app.flags.DEFINE_string("activation", "tanh", "tanh, relu or linear.")
+tf.app.flags.DEFINE_string("optimizer", "adam", "adam, sgd or rmsprop.")
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -304,7 +305,12 @@ def build_model(max_seq_len, vocab_size, emb_size, learning_rate, encoder_type,
         dim=1)
     # Average loss across batch.
     total_loss = tf.reduce_mean(losses, name="total_loss")
-    train_step = tf.train.AdamOptimizer(learning_rate).minimize(total_loss)
+    if FLAGS.optimizer = "adam":
+      train_step = tf.train.AdamOptimizer(learning_rate).minimize(total_loss)
+    elif FLAGS.optimizer = "sgd":
+      train_step = tf.train.GradientDescentOptimizer(learning_rate).minimize(total_loss)
+    else:
+      train_step = tf.train.RMSPropOptimizer(learning_rate).minimize(total_loss)
     return gloss_in, head_in, total_loss, train_step, output_form, dropout_keep_prob
 
 def get_dev_loss(sess, total_loss, gloss_in, head_in, data_dir, vocab_size, dropout_keep_prob):
