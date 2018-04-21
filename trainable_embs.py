@@ -67,8 +67,8 @@ tf.app.flags.DEFINE_boolean("pretrained_input", False,
 tf.app.flags.DEFINE_string("embeddings_path",
                            "./embeddings/GoogleWord2Vec.clean.normed.pkl",
                            "Path to pre-trained (.pkl) word embeddings.")
-tf.app.flags.DEFINE_string("encoder_type", "recurrent", "BOW or recurrent or CNN.")
-tf.app.flags.DEFINE_string("model_name", "recurrent", "BOW or recurrent or CNN.")
+tf.app.flags.DEFINE_string("encoder_type", "recurrent", "BOW or recurrent or CNN or RNNATT or ATT or BOWFC.")
+tf.app.flags.DEFINE_string("model_name", "recurrent", "BOW or recurrent or CNN or RNNATT or ATT or BOWFC.")
 tf.app.flags.DEFINE_integer("terminate_epochs", 6, "Terminate training if "
                             "the dev_eval_score not updated for such epochs")
 tf.app.flags.DEFINE_integer("window_size", 2, "window size of text CNN")
@@ -241,6 +241,13 @@ def build_model(max_seq_len, vocab_size, emb_size, learning_rate, encoder_type,
       _, state = tf.nn.dynamic_rnn(cell, embs, dtype=tf.float32)
       # state is a pair: (hidden_state, output)
       core_out = state[0]
+    elif encoder_type == "RNNATT":
+      cell = tf.nn.rnn_cell.LSTMCell(emb_size)
+      # state is the final state of the RNN.
+      outputs, state = tf.nn.dynamic_rnn(cell, embs, dtype=tf.float32)
+      # TODO: not implemented
+      core_out = state[0]
+
     elif encoder_type == "CNN":
       embs = tf.expand_dims(embs, 3)
       conv1 = tf.layers.conv2d(
@@ -264,11 +271,12 @@ def build_model(max_seq_len, vocab_size, emb_size, learning_rate, encoder_type,
               padding='VALID',
               name='conv2')
       core_out = tf.squeeze(tf.reduce_max(conv2, 1), squeeze_dims=[1], name='pool2')
+    elif encoder_type == "BOWFC":
+      core_out = tf.reshape(tf.concat(embs, axis=1), (-1, max_seq_len*emb_size))
     # BOW
     else:
-      # core_out = tf.reduce_mean(embs, axis=1)
-      core_out = tf.reshape(tf.concat(embs, axis=1), (-1, max_seq_len*emb_size))
-      logger.info(core_out.get_shape().as_list())
+      core_out = tf.reduce_mean(embs, axis=1)
+      # logger.info(core_out.get_shape().as_list())
     # core_out is the output from the gloss encoder.
     output_form = "cosine"
     if pretrained_target:
