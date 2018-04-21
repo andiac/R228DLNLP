@@ -266,8 +266,8 @@ def build_model(max_seq_len, vocab_size, emb_size, learning_rate, encoder_type,
       core_out = tf.squeeze(tf.reduce_max(conv2, 1), squeeze_dims=[1], name='pool2')
     # BOW
     else:
-      # core_out = tf.reduce_mean(embs, axis=1)
-      core_out = tf.reshape(tf.concat(embs, axis=1), (-1, max_seq_len*emb_size))
+      core_out = tf.reduce_mean(embs, axis=1)
+      # core_out = tf.reshape(tf.concat(embs, axis=1), (-1, max_seq_len*emb_size))
       logger.info(core_out.get_shape().as_list())
     # core_out is the output from the gloss encoder.
     output_form = "cosine"
