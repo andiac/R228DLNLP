@@ -245,8 +245,17 @@ def build_model(max_seq_len, vocab_size, emb_size, learning_rate, encoder_type,
       cell = tf.nn.rnn_cell.LSTMCell(emb_size)
       # state is the final state of the RNN.
       outputs, state = tf.nn.dynamic_rnn(cell, embs, dtype=tf.float32)
-      # TODO: not implemented
-      core_out = state[0]
+      # [None, 20, 300]
+      a = tf.keras.layers.Permute((2, 1))(outputs)
+      a = tf.keras.layers.Dense(max_seq_len, activation='softmax')(a)
+      probs = tf.keras.layers.Permute((2, 1))(outputs)
+      probs = tf.reduce_mean(probs, axis=1)
+      probs = tf.expand_dims(probs, axis=1)
+      #print(probs.get_shape().as_list())
+      #print(outputs.get_shape().as_list())
+      # tf.keras.layers.Dense()
+      core_out = tf.squeeze(tf.matmul(probs, outputs), squeeze_dims=[1])
+      #print(core_out.get_shape().as_list())
 
     elif encoder_type == "CNN":
       embs = tf.expand_dims(embs, 3)
