@@ -67,8 +67,8 @@ tf.app.flags.DEFINE_boolean("pretrained_input", False,
 tf.app.flags.DEFINE_string("embeddings_path",
                            "./embeddings/GoogleWord2Vec.clean.normed.pkl",
                            "Path to pre-trained (.pkl) word embeddings.")
-tf.app.flags.DEFINE_string("encoder_type", "recurrent", "BOW or recurrent or CNN or RNNATT or ATT or BOWFC.")
-tf.app.flags.DEFINE_string("model_name", "recurrent", "BOW or recurrent or CNN or RNNATT or ATT or BOWFC.")
+tf.app.flags.DEFINE_string("encoder_type", "recurrent", "BOW or recurrent or CNN or RNNATT or ATT or BOWFC or BIRNNATT.")
+tf.app.flags.DEFINE_string("model_name", "recurrent", "BOW or recurrent or CNN or RNNATT or ATT or BOWFC or BIRNNATT.")
 tf.app.flags.DEFINE_integer("terminate_epochs", 6, "Terminate training if "
                             "the dev_eval_score not updated for such epochs")
 tf.app.flags.DEFINE_integer("window_size", 2, "window size of text CNN")
@@ -245,6 +245,24 @@ def build_model(max_seq_len, vocab_size, emb_size, learning_rate, encoder_type,
       cell = tf.nn.rnn_cell.LSTMCell(emb_size)
       # state is the final state of the RNN.
       outputs, state = tf.nn.dynamic_rnn(cell, embs, dtype=tf.float32)
+      # [None, 20, 300]
+      a = tf.keras.layers.Permute((2, 1))(outputs)
+      a = tf.keras.layers.Dense(max_seq_len, activation='softmax')(a)
+      # print(a.get_shape().as_list())
+      a = tf.reduce_mean(a, axis=1)
+      # print(a.get_shape().as_list())
+      probs = tf.expand_dims(a, axis=1)
+      # print(probs.get_shape().as_list())
+      #print(outputs.get_shape().as_list())
+      # tf.keras.layers.Dense()
+      core_out = tf.squeeze(tf.matmul(probs, outputs), squeeze_dims=[1])
+      #print(core_out.get_shape().as_list())
+    elif encoder_type == "BIRNNATT":
+      fcell = tf.nn.rnn_cell.LSTMCell(emb_size)
+      bcell = tf.nn.rnn_cell.LSTMCell(emb_size)
+      # state is the final state of the RNN.
+      (outputf, outputb), state = tf.nn.bidirectional_dynamic_rnn(fcell, bcell, embs, dtype=tf.float32)
+      outputs = (outputf + outputb) / 2.0
       # [None, 20, 300]
       a = tf.keras.layers.Permute((2, 1))(outputs)
       a = tf.keras.layers.Dense(max_seq_len, activation='softmax')(a)
