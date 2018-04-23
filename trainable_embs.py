@@ -79,6 +79,8 @@ tf.app.flags.DEFINE_float("dropout_keep_prob", 0.8,
                           "Keep probability of dropout")
 tf.app.flags.DEFINE_string("activation", "tanh", "tanh, relu or linear.")
 tf.app.flags.DEFINE_string("optimizer", "adam", "adam, sgd or rmsprop.")
+tf.app.flags.DEFINE_boolean("restoreatt", False, "restore the model with attention" 
+                            "in order to visualize it.")
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -149,12 +151,13 @@ def get_embedding_matrix(embedding_dict, vocab, emb_dim):
   return np.asarray(emb_matrix)
 
 
-def gen_batch(raw_data, batch_size):
+def gen_batch(raw_data, batch_size, shuffle=True):
   raw_x, raw_y = raw_data
   # shuffle
-  p = np.random.permutation(len(raw_y))
-  raw_x = raw_x[p]
-  raw_y = raw_y[p]
+  if shuffle:
+    p = np.random.permutation(len(raw_y))
+    raw_x = raw_x[p]
+    raw_y = raw_y[p]
   data_length = len(raw_x)
   num_batches = data_length // batch_size
   data_x, data_y = [], []
@@ -164,12 +167,12 @@ def gen_batch(raw_data, batch_size):
     yield (data_x, data_y)
 
 
-def gen_epochs(data_path, total_epochs, batch_size, vocab_size, phase="train"):
+def gen_epochs(data_path, total_epochs, batch_size, vocab_size, phase="train", shuffle=True):
   # Read all of the glosses and heads into two arrays.
   raw_data = read_data(data_path, vocab_size, phase)
   # Return a generator over the data.
   for _ in range(total_epochs):
-    yield gen_batch(raw_data, batch_size)
+    yield gen_batch(raw_data, batch_size, shuffle=shuffle)
 
 
 def build_model(max_seq_len, vocab_size, emb_size, learning_rate, encoder_type,
@@ -249,7 +252,7 @@ def build_model(max_seq_len, vocab_size, emb_size, learning_rate, encoder_type,
       a = tf.keras.layers.Permute((2, 1))(outputs)
       a = tf.keras.layers.Dense(max_seq_len, activation='softmax')(a)
       # print(a.get_shape().as_list())
-      a = tf.reduce_mean(a, axis=1)
+      a = tf.reduce_mean(a, axis=1, name="probs")
       # print(a.get_shape().as_list())
       probs = tf.expand_dims(a, axis=1)
       # print(probs.get_shape().as_list())
@@ -267,7 +270,7 @@ def build_model(max_seq_len, vocab_size, emb_size, learning_rate, encoder_type,
       a = tf.keras.layers.Permute((2, 1))(outputs)
       a = tf.keras.layers.Dense(max_seq_len, activation='softmax')(a)
       # print(a.get_shape().as_list())
-      a = tf.reduce_mean(a, axis=1)
+      a = tf.reduce_mean(a, axis=1, name="probs")
       # print(a.get_shape().as_list())
       probs = tf.expand_dims(a, axis=1)
       # print(probs.get_shape().as_list())
@@ -304,7 +307,7 @@ def build_model(max_seq_len, vocab_size, emb_size, learning_rate, encoder_type,
     elif encoder_type == "ATT":
       a = tf.keras.layers.Permute((2, 1))(embs)
       a = tf.keras.layers.Dense(max_seq_len, activation='softmax')(a)
-      a = tf.reduce_mean(a, axis=1)
+      a = tf.reduce_mean(a, axis=1, name="probs")
       probs = tf.expand_dims(a, axis=1)
       core_out = tf.squeeze(tf.matmul(probs, embs), squeeze_dims=[1])
     # BOW
@@ -489,16 +492,25 @@ def evaluate_model(sess, data_dir, input_node, target_node, prediction,
 
   vocab, rev_vocab = data_utils.initialize_vocabulary(vocab_file)
 
-  # graph = tf.get_default_graph()
   embs_variable = [v for v in tf.global_variables() if v.name == "out_emb:0"][0]
   embs=sess.run(embs_variable)
 
+  graph = tf.get_default_graph()
+  # get the names of input and output tensors
+  if FLAGS.restoreatt:
+    probs = graph.get_tensor_by_name("probs:0")
+  else:
+    probs = None
+
   ranks = np.array([], dtype=int)
   for idx, epoch in enumerate(
-    gen_epochs(data_dir, total_epochs=1, batch_size = 1, vocab_size=FLAGS.vocab_size, phase="dev")):
+    gen_epochs(data_dir, total_epochs=1, batch_size = 1, vocab_size=FLAGS.vocab_size, phase="dev", shuffle=False)):
 
     for step, (gloss, head) in enumerate(epoch):
-      model_preds = sess.run(prediction, feed_dict={input_node: gloss, dropout_keep_prob: 1.0})
+      if FLAGS.restoreatt:
+        model_preds, att_probs = sess.run([prediction, probs], feed_dict={input_node: gloss, dropout_keep_prob: 1.0})
+      else:
+        model_preds = sess.run(prediction, feed_dict={input_node: gloss, dropout_keep_prob: 1.0})
 
       sims = 1 - np.squeeze(dist.cdist(model_preds, embs, metric="cosine"))
       # replace nans with 0s.
@@ -510,8 +522,13 @@ def evaluate_model(sess, data_dir, input_node, target_node, prediction,
       assert len(rank[0]) == 1
       ranks = np.append(ranks, rank[0], axis=0)
       
-      if rank[0][0] <= 10 or rank[0][0] > 50000:
-        print(rank[0][0], rev_vocab[head[0]], ":", " ".join([rev_vocab[idx] for idx in gloss[0]]))
+      # if rank[0][0] <= 10 or rank[0][0] > 50000:
+      #   print(rank[0][0], rev_vocab[head[0]], ":", " ".join([rev_vocab[idx] for idx in gloss[0]]))
+      #   if FLAGS.restoreatt:
+      #     print(att_probs)
+      print(rank[0][0], rev_vocab[head[0]], ":", " ".join([rev_vocab[idx] for idx in gloss[0]]))
+      if FLAGS.restoreatt:
+        print(att_probs)
 
   print(ranks)
   print(np.median(ranks, axis=0))
@@ -537,6 +554,8 @@ def restore_model(sess, save_dir, vocab_file, out_form):
 
 def query_model(sess, input_node, predictions, vocab, rev_vocab, 
                 max_seq_len, dropout_keep_prob, saver=None, embs=None, out_form="cosine"):
+  embs_variable = [v for v in tf.global_variables() if v.name == "out_emb:0"][0]
+  embs=sess.run(embs_variable)
   while True:
     sys.stdout.write("Type a definition: ")
     sys.stdout.flush()
