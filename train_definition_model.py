@@ -148,7 +148,7 @@ def get_embedding_matrix(embedding_dict, vocab, emb_dim):
   return np.asarray(emb_matrix)
 
 
-def gen_batch(raw_data, batch_size):
+def gen_batch(raw_data, batch_size, shuffle=True):
   raw_x, raw_y = raw_data
   # shuffle
   p = np.random.permutation(len(raw_y))
@@ -163,12 +163,12 @@ def gen_batch(raw_data, batch_size):
     yield (data_x, data_y)
 
 
-def gen_epochs(data_path, total_epochs, batch_size, vocab_size, phase="train"):
+def gen_epochs(data_path, total_epochs, batch_size, vocab_size, phase="train", shuffle=True):
   # Read all of the glosses and heads into two arrays.
   raw_data = read_data(data_path, vocab_size, phase)
   # Return a generator over the data.
   for _ in range(total_epochs):
-    yield gen_batch(raw_data, batch_size)
+    yield gen_batch(raw_data, batch_size, shuffle=shuffle)
 
 
 def build_model(max_seq_len, vocab_size, emb_size, learning_rate, encoder_type,
@@ -455,7 +455,7 @@ def evaluate_model(sess, data_dir, input_node, target_node, prediction,
 
   ranks = np.array([], dtype=int)
   for idx, epoch in enumerate(
-    gen_epochs(data_dir, total_epochs=1, batch_size = 1, vocab_size=FLAGS.vocab_size, phase="dev")):
+    gen_epochs(data_dir, total_epochs=1, batch_size = 1, vocab_size=FLAGS.vocab_size, phase="dev", shuffle=False)):
 
     for step, (gloss, head) in enumerate(epoch):
       model_preds = sess.run(prediction, feed_dict={input_node: gloss, dropout_keep_prob: 1.0})
