@@ -526,7 +526,16 @@ def evaluate_model(sess, data_dir, input_node, target_node, prediction,
       #   print(rank[0][0], rev_vocab[head[0]], ":", " ".join([rev_vocab[idx] for idx in gloss[0]]))
       #   if FLAGS.restoreatt:
       #     print(att_probs)
+
+      occur_count = 0
       print(rank[0][0], rev_vocab[head[0]], ":", " ".join([rev_vocab[idx] for idx in gloss[0]]))
+      word = rev_vocab[head[0]]
+      fp = open("./data/definitions.tok.ft0.dt10")
+      for line in fp:
+        if line.strip().split()[0] == word:
+          occur_count += 1
+      fp.close()
+      print(occur_count)
       if FLAGS.restoreatt:
         print(att_probs)
 
